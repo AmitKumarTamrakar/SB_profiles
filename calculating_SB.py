@@ -1,5 +1,8 @@
 """
 Program for calculating the surface brightness profile of a given galaxy
+Output:
+- A plot of the galaxy with the ALL the elliptical annuli applied to get its surface brightness profile
+- The surface brightness profile itself
 By Fernando Buitrago (fbuitrago@gmail.com)
 """
 
@@ -12,6 +15,7 @@ from astropy.table import hstack
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import pdb #for debugging purposes only
+from astropy.cosmology import FlatLambdaCDM
 
 
 def finding_coo_max_pix(img):
@@ -23,8 +27,10 @@ def finding_coo_max_pix(img):
 path_images       = '/mnt/disk2/fb/ellipticals_hudf09/galfiting_quadruple_sersic_natural_star_with_new_mask/'
 path_sigma_images = '/mnt/disk2/fb/ellipticals_hudf09/sigma_images_h_band/'
 pix_scale = 0.06 #[arcsec/pix]
-step = 2./7. #[arcsec], although it is approximate (always very close anyway) because it is calculated in pixels and therefore there might a rounding
-x0 = pix_scale  #[arcsec], the first aperture is the first pixel
+zz = 0.667
+step_1 = 0.5        #[kpc]
+transition_1_2 = 2. #[kpc]
+step_2 = 2.         #[kpc]
 x1 = 15.        #[arcsec]
 y0 = 32.        #[mag/arcsec^2]
 y1 = 16.        #[mag/arcsec^2]
@@ -32,6 +38,12 @@ figsize_x = 10. #[inches]
 figsize_y = 10. #[inches]
 zeropoint = 25.96
 
+#moving distances from kpc to arcsec
+cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+kpc_per_arcsec = 1./cosmo.arcsec_per_kpc_proper(zz)
+step_1         = step_1        /kpc_per_arcsec; step_1         = step_1.value
+transition_1_2 = transition_1_2/kpc_per_arcsec; transition_1_2 = transition_1_2.value
+step_2         = step_2        /kpc_per_arcsec; step_2         = step_2.value
 
 #reading the images====
 img = fits.open(path_images+'model_3_h_conv.fits')
@@ -47,23 +59,25 @@ rms_header = rms[0].header
 centroid_y,centroid_x= finding_coo_max_pix(image)
 centroid = (centroid_x,centroid_y)
 
-#calculating the resolution according to the step between points (it's important to know the resolution for other steps in this program)
-x0_pix   = x0/pix_scale
-x1_pix   = x1/pix_scale
-step_pix = step/pix_scale
-resolution = (x1_pix - x0_pix) / step_pix
-resolution = int( math.floor(resolution) )
+#calculating the semi-major axis
+x0_1 = step_1
+x1_1 = transition_1_2 
+first_part_vect_dist  = np.arange(x0_1/pix_scale,x1_1/pix_scale,step_1/pix_scale)
+x0_2 = x1_1
+x1_2 = x1
+second_part_vect_dist = np.arange(x0_2/pix_scale,x1_2/pix_scale,step_2/pix_scale) 
+aa = np.concatenate((first_part_vect_dist,second_part_vect_dist))
+resolution = aa.size
 
 #defining the apertures parameters
-axis_ratio = 0.7182
-position_angle = math.radians(73.1688)+math.radians(90.)
-aa = np.linspace(x0_pix,x1_pix,resolution) #semi-major axis
-bb = aa*axis_ratio
+axis_ratio = 0.90
+position_angle = math.radians(75.22)+math.radians(90.) #math.radians(90.) for having the same reference system
+bb = aa*axis_ratio #semi-minor axis
 
 #creating the figure with the galaxy and its apertures
 fig = plt.figure(figsize=(figsize_x,figsize_y))
 ax  = plt.subplot() #nothing inside because it is the only plot
-plt.imshow(image, cmap ='cubehelix', norm=colors.LogNorm())
+plt.imshow(image, cmap = 'cubehelix', norm = colors.LogNorm(), interpolation = 'nearest')
 
 #calculating the flux and the area in each elliptical annulus
 apers = []
@@ -78,7 +92,7 @@ for ii in range(len(aa)):
         ellip_annulus = EllipticalAnnulus(centroid,       0,aa[ii],bb[ii],position_angle)
     else:
         ellip_annulus = EllipticalAnnulus(centroid,aa[ii-1],aa[ii],bb[ii],position_angle)
-    apers.append(aperture_photometry(image, ellip_annulus, error = rms_image, method = 'exact'))
+    apers.append(aperture_photometry(image, ellip_annulus, error = rms_image))
     area_annulus = ellip_annulus.area()
     area.append(area_annulus)
     #I plot the apertures
@@ -109,18 +123,20 @@ for ii in range(resolution):
 surf_bright       =             -2.5*np.log10(  flux            /area )+zeropoint+5.*np.log10(pix_scale)
 surf_bright_error = np.absolute(-2.5*np.log10( (flux+sigma_flux)/area )+zeropoint+5.*np.log10(pix_scale)) - surf_bright
 distance_in_arcsec = aa*pix_scale
-for ii in range(resolution):
-    print(area[ii],flux[ii],flux[ii]/area[ii])
 
 #creating the figure with the surface brightness profile
 fig = plt.figure(figsize=(figsize_x,figsize_y))
 ax  = plt.subplot() #nothing inside because it is the only plot
 ax.set_xlim(0.,x1)
 ax.set_ylim(y0,y1)
-ax.scatter (distance_in_arcsec,surf_bright, marker =".", color = "c")
+ax.scatter  (distance_in_arcsec,surf_bright, marker =".", color = "c")
 plt.errorbar(distance_in_arcsec,surf_bright, yerr= surf_bright_error, linestyle = "None", ecolor = "r")
-plt.xlabel('Radius [$arcsec$]')
-plt.ylabel('Surface brightness [$mag$ $arcsec^{-2}$]')
+plt.xlabel('Radius [arcsec]')
+plt.ylabel('Surface brightness [mag arcsec$^{-2}$]')
+plt.grid()
+ax2 = ax.twiny() #they share the same y-axis
+ax2.plot(distance_in_arcsec*kpc_per_arcsec.value,surf_bright, alpha = 0)
+plt.xlabel('Radius [kpc]')
 plt.savefig("pyapertures_surfbright.pdf")
 plt.close()
 plt.clf()
